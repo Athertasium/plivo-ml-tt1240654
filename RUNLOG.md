@@ -148,7 +148,9 @@ score worse than the silence-timer baseline.**
 
 ## Final — shipped model
 
-Pooled English+Hindi, language-blind, C=1.0, cost-weighted, calibrated.
+Pooled English+Hindi, language-blind, C=0.1, cost-weighted, calibrated.
+(C is re-selected by the sweep on every run; it moved back to 0.1 once the
+Run 3 F0 change was reverted. The value in `model.npz` is authoritative.)
 `predictions_english.csv` / `predictions_hindi.csv` regenerated via
 `predict.py` from the frozen `model.npz`.
 
