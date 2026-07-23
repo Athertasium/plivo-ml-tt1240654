@@ -146,21 +146,88 @@ score worse than the silence-timer baseline.**
 | OOF delay | **1290 ms** | 850 ms |
 | OOF AUC | 0.660 | 0.642 |
 
+## Run 6 — the periodicity the voicing gate was throwing away
+
+Diagnostics first, because three plausible ideas turned out to be dead and it
+was cheaper to kill them than to build on them.
+
+**Hindi-only training does nothing.** Trained on Hindi alone: 850 ms, AUC
+0.659 (pooled: 850 ms, 0.642). Marginally better ranking, identical delay,
+still pinned to `threshold=0.05`. Pooling with English is *not* what holds
+Hindi back.
+
+**Gradient boosting, re-tested fairly, still does nothing.** `experiments.py`
+returned raw `predict_proba` while `train_model.py` applies the Run 5
+calibration spread — so the Run 4 HGB row predates the fix that was invented
+specifically to cure Hindi's stuck operating point, and was never re-run with
+it. Re-run: HGB calibrated 850 ms / AUC 0.697, uncalibrated 850 ms / 0.700.
+**+4 AUC points over LR buys exactly zero on the metric**, which retires the
+"maybe robustness is costing us the grade" objection to Run 4 with evidence
+rather than judgement.
+
+**The scorer's argmin hides how close you are.** Sweeping the whole
+(threshold × delay) grid instead of reading the winner shows the constraint:
+to beat 850 ms you need `D·f + 1.6·(1−f) < 0.85`, where `f` is the fraction of
+turn-ends that fire. NOTES.md was quoting the *hardest* corner.
+
+| delay | `f` needed | `f` achieved | turns cut | latency |
+|---|---|---|---|---|
+| 0.80 s | 93.8% | 65% | 5 | 1080 ms |
+| **0.50 s** | **68.2%** | **62%** | 5 | **918 ms** |
+
+So Hindi is ~6 turn-ends short at the 500 ms operating point, not 29 short at
+the 800 ms one. The target is precision at the top of the score distribution,
+not overall AUC — which is exactly what HGB proved by raising AUC and moving
+nothing.
+
+**The feature.** `analyse_file` computed the autocorrelation peak ratio, used
+it as a yes/no voicing gate, and discarded the continuous value. Kept as a
+frame array it costs nothing — the FFT was already paid for. Three variants
+were measured rather than assumed:
+
+| variant | C | OOF english | OOF hindi |
+|---|---|---|---|
+| baseline (20 features) | 0.1 | 1290 ms / 0.660 | 850 ms / 0.642 |
+| + all three | 0.03 | 1258 ms / 0.655 | 850 ms / 0.645 |
+| **+ `vstr_slope` only** | 0.03 | **1228 ms / 0.660** | **850 ms / 0.648** |
+| + `vstr_slope` + `vstr_end_rel` | 0.03 | 1228 ms / 0.656 | 850 ms / 0.644 |
+
+The two *level* features are at chance on the dangerous long holds (0.449 and
+0.454) and carrying them costs 30 ms; the slope is 4th-best of all 23 features
+on that slice (0.570). Dropping the levels recovers the AUC the levels had
+lost *and* takes the delay. C moved 0.1 → 0.03 in the same sweep, so it was
+isolated: old features at C=0.03 give 1276 ms, meaning **14 ms of the gain is
+regularisation and 48 ms is the feature.**
+
+The fitted sign is the opposite of the hypothesis that motivated it —
+`vstr_slope` enters at **+0.133**, so periodicity *rises* into a turn-final
+pause rather than creaking away. Most likely it is reading final lengthening:
+turns end on a sustained cleanly-voiced vowel, while mid-turn hesitations get
+cut off on a consonant or trail into breath. Logged as measured.
+
+Hindi still does not move: 850 ms, `threshold=0.05`. AUC 0.642 → 0.648 and the
+frontier gap at 500 ms is unchanged in kind.
+
 ## Final — shipped model
 
-Pooled English+Hindi, language-blind, C=0.1, cost-weighted, calibrated.
-(C is re-selected by the sweep on every run; it moved back to 0.1 once the
-Run 3 F0 change was reverted. The value in `model.npz` is authoritative.)
+Pooled English+Hindi, language-blind, 21 features, C=0.03, cost-weighted,
+calibrated. (C is re-selected by the sweep on every run; it moved to 0.03 when
+`vstr_slope` was added in Run 6. The value in `model.npz` is authoritative.)
 `predictions_english.csv` / `predictions_hindi.csv` regenerated via
 `predict.py` from the frozen `model.npz`.
 
 | | english | hindi |
 |---|---|---|
-| **OOF (honest)** | **1290 ms** (AUC 0.660) | **850 ms** (AUC 0.642) |
-| in-sample (shipped csv) | 1152 ms (AUC 0.720) | 850 ms (AUC 0.696) |
+| **OOF (honest)** | **1228 ms** (AUC 0.660) | **850 ms** (AUC 0.648) |
+| in-sample (shipped csv) | 1192 ms (AUC 0.710) | 850 ms (AUC 0.697) |
 | baseline | 1600 ms | 850 ms |
 
-English **1600 → 1290 ms OOF, a 19% cut in response delay**. Hindi holds at
+English **1600 → 1228 ms OOF, a 23% cut in response delay**. Hindi holds at
 850 ms: the calibration floor guarantees it never regresses below baseline, but
 the model does not yet beat the timer there — see NOTES.md for why and what I
 would do next.
+
+Note the in-sample English number moved the *wrong* way (1152 → 1192 ms) while
+OOF improved 1290 → 1228 ms. That is the stronger regularisation (C 0.1 →
+0.03) buying generalisation at the cost of fit, and it is the direction you
+want when only one of those two numbers is honest.

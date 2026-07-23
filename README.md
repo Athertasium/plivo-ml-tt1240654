@@ -2,8 +2,9 @@
 
 Predicts, for each pause in a user turn, the probability that the turn is over.
 
-**Result (out-of-fold, grouped by turn):** English 1600 → **1290 ms** mean
-response delay at ≤5% interrupted turns. Hindi holds at its 850 ms baseline.
+**Result (out-of-fold, grouped by turn):** English 1600 → **1228 ms** mean
+response delay at ≤5% interrupted turns, a 23% cut. Hindi holds at its 850 ms
+baseline.
 
 - [`SUMMARY.html`](SUMMARY.html) — full writeup with charts
 - [`RUNLOG.md`](RUNLOG.md) — every scoring run and what changed

@@ -56,10 +56,10 @@
 just a breath — from raw audio, causally, with no pretrained models.</p>
 
 <div class="kpi">
-  <div><div class="v win">1290 ms</div><div class="k">English OOF &middot; from 1600</div></div>
+  <div><div class="v win">1228 ms</div><div class="k">English OOF &middot; from 1600</div></div>
   <div><div class="v flat">850 ms</div><div class="k">Hindi OOF &middot; baseline held</div></div>
   <div><div class="v">0.660</div><div class="k">English OOF AUC</div></div>
-  <div><div class="v">20</div><div class="k">causal features</div></div>
+  <div><div class="v">21</div><div class="k">causal features</div></div>
 </div>
 
 <h2>1. The result in one table</h2>
@@ -68,15 +68,15 @@ just a breath — from raw audio, causally, with no pretrained models.</p>
   <tr><th>System</th><th>English</th><th>Hindi</th><th>Evaluation</th></tr>
   <tr><td>Silence-only baseline</td><td class="num">1600 ms</td>
       <td class="num">850 ms</td><td>given</td></tr>
-  <tr><td><strong>This model</strong></td><td class="num win">1290 ms</td>
+  <tr><td><strong>This model</strong></td><td class="num win">1228 ms</td>
       <td class="num flat">850 ms</td><td>out-of-fold, grouped by turn</td></tr>
-  <tr><td>This model</td><td class="num">1152 ms</td>
+  <tr><td>This model</td><td class="num">1192 ms</td>
       <td class="num">850 ms</td><td>in-sample (shipped CSVs)</td></tr>
   <tr><td>Perfect ranker (oracle)</td><td class="num">100 ms</td>
       <td class="num">100 ms</td><td>upper bound on the metric</td></tr>
 </table>
 </div>
-<p><strong>English response delay drops 19%</strong>, 1600&nbsp;&rarr;&nbsp;1290&nbsp;ms
+<p><strong>English response delay drops 23%</strong>, 1600&nbsp;&rarr;&nbsp;1228&nbsp;ms
 out-of-fold. Hindi holds at its baseline — an honest null result, explained in
 &sect;6. The oracle row matters: a perfect ranker would score 100&nbsp;ms, so
 essentially <em>all</em> the remaining gap is model quality, not task structure.</p>
@@ -181,23 +181,24 @@ above the lowest threshold, which <strong>guarantees the model can never score
 worse than the silence-timer baseline</strong>.</p>
 
 <h2>4. How the score moved</h2>
-<svg viewBox="0 0 620 220" role="img" aria-label="English OOF delay by run">
+<svg viewBox="0 0 620 256" role="img" aria-label="English OOF delay by run">
   <g font-size="11" fill="#98a2b3">
     <text x="0" y="26">baseline</text><text x="0" y="62">run 1</text>
     <text x="0" y="98">run 3</text><text x="0" y="134">run 4</text>
-    <text x="0" y="170">final</text>
+    <text x="0" y="170">run 5</text><text x="0" y="206">final</text>
   </g>
   <rect x="70" y="14" width="525" height="18" rx="3" fill="#f87171" opacity=".85"/>
   <rect x="70" y="50" width="435" height="18" rx="3" fill="#fbbf24" opacity=".85"/>
   <rect x="70" y="86" width="461" height="18" rx="3" fill="#f87171" opacity=".6"/>
-  <rect x="70" y="122" width="428" height="18" rx="3" fill="#4ade80" opacity=".7"/>
-  <rect x="70" y="158" width="423" height="18" rx="3" fill="#4ade80"/>
+  <rect x="70" y="122" width="428" height="18" rx="3" fill="#4ade80" opacity=".55"/>
+  <rect x="70" y="158" width="423" height="18" rx="3" fill="#4ade80" opacity=".75"/>
+  <rect x="70" y="194" width="403" height="18" rx="3" fill="#4ade80"/>
   <g font-size="11" fill="#0f1115" font-weight="700">
     <text x="540" y="27">1600</text><text x="450" y="63">1325</text>
     <text x="476" y="99">1405</text><text x="443" y="135">1305</text>
-    <text x="438" y="171">1290</text>
+    <text x="438" y="171">1290</text><text x="418" y="207">1228</text>
   </g>
-  <text x="70" y="200" fill="#98a2b3" font-size="11">
+  <text x="70" y="236" fill="#98a2b3" font-size="11">
     English mean response delay, ms (out-of-fold) — lower is better</text>
 </svg>
 <p class="cap">Run 3 <span class="neg">regressed</span>: I changed the pitch
@@ -292,15 +293,18 @@ recovers that.</p>
 <h2>7. Why this beats the status quo</h2>
 <ul>
   <li><strong>Against a silence timer</strong> (what naive VAD endpointing
-      does): 19% lower response delay on English at the same 5% interruption
+      does): 23% lower response delay on English at the same 5% interruption
       rate, and never worse on Hindi by construction.</li>
   <li><strong>Against a leak-fitted model:</strong> a model using pause duration
       or file length would post a near-perfect score here and fail completely in
       production. Refusing those is the difference between a number and a
       system.</li>
-  <li><strong>Against in-sample reporting:</strong> the honest OOF gap (1290 vs
-      1152 ms in-sample) is roughly 140 ms — anyone tuning on in-sample numbers
-      is optimising noise on a 5-turn budget.</li>
+  <li><strong>Against in-sample reporting:</strong> adding the periodicity
+      feature moved OOF <em>down</em> 1290&nbsp;&rarr;&nbsp;1228&nbsp;ms while
+      moving in-sample <em>up</em> 1152&nbsp;&rarr;&nbsp;1192&nbsp;ms. The two
+      numbers disagree about the sign of the change, and only one of them is
+      honest — anyone tuning on in-sample is optimising noise on a 5-turn
+      budget.</li>
   <li><strong>Deployment shape:</strong> ships as four arrays in an
       <code>.npz</code>; inference is a standardise-then-dot-product with no
       pickle to break across scikit-learn versions. Gradient boosting won three
@@ -319,7 +323,7 @@ logistic regression over the better-scoring gradient booster.
 <div class="who">
 <span class="tag">AGENT</span><strong>Implementation and measurement.</strong>
 Data inspection that surfaced both leaks; the vectorised FFT pitch/spectral
-front end replacing the starter's O(n²) per-frame loop; the 20 causal features;
+front end replacing the starter's O(n²) per-frame loop; the 21 causal features;
 the grouped-CV and cross-lingual evaluation harness; the dangerous-hold
 diagnostic; the scorer-matched cost weights and threshold-grid calibration; the
 ablation table; and these documents.

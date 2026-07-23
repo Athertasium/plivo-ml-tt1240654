@@ -5,8 +5,9 @@ CAUSALITY CONTRACT
 For a pause at time `pause_start`, every feature is computed from
 `audio[0 : pause_start]` only. Two rules enforce this:
 
-1. Frame-level arrays (energy / F0 / spectral tilt) are computed ONCE per
-   file for speed, but every per-pause call slices them to `n_causal_frames`
+1. Frame-level arrays (energy / F0 / periodicity / spectral tilt) are computed
+   ONCE per file for speed, but every per-pause call slices them to
+   `n_causal_frames`
    -- the number of frames lying *entirely* before `pause_start`. A frame is
    kept only if `i*hop + frame_len <= pause_start*sr`, so no frame ever peeks
    across the boundary.
@@ -88,6 +89,7 @@ class FrameData:
     rms_db: np.ndarray     # short-time energy, dB
     f0: np.ndarray         # Hz, 0.0 where unvoiced
     tilt_db: np.ndarray    # low-band / high-band energy ratio, dB
+    vstr: np.ndarray       # autocorrelation peak ratio in [0,1]: periodicity
 
     def __len__(self) -> int:
         return len(self.rms_db)
@@ -105,7 +107,8 @@ def analyse_file(x: np.ndarray, sr: int) -> FrameData:
     n, fl = fr.shape
     if n == 0:
         z = np.zeros(0, dtype=np.float32)
-        return FrameData(sr=sr, rms_db=z, f0=z.copy(), tilt_db=z.copy())
+        return FrameData(sr=sr, rms_db=z, f0=z.copy(), tilt_db=z.copy(),
+                         vstr=z.copy())
 
     rms = np.sqrt(np.mean(fr.astype(np.float64) ** 2, axis=1) + 1e-12)
     rms_db = (20 * np.log10(rms + 1e-12)).astype(np.float32)
@@ -130,6 +133,7 @@ def analyse_file(x: np.ndarray, sr: int) -> FrameData:
     lo = int(sr / F0_MAX)
     hi = min(int(sr / F0_MIN), fl - 1)
     f0 = np.zeros(n, dtype=np.float32)
+    vstr = np.zeros(n, dtype=np.float32)
     if hi > lo:
         band = ac[:, lo:hi]
         lag = lo + np.argmax(band, axis=1)
@@ -139,6 +143,21 @@ def analyse_file(x: np.ndarray, sr: int) -> FrameData:
         loud = np.max(np.abs(fr), axis=1) >= 1e-4
         ok = loud & (norm >= VOICING_THRESH) & (lag > 0)
         f0[ok] = (sr / lag[ok]).astype(np.float32)
+        # `norm` is how periodic the frame is; above it is spent as a yes/no
+        # voicing gate and then discarded. Keep the continuous value too --
+        # it is a different signal from f0 (simply absent once the gate fails)
+        # and from tilt_db (spectral balance, not periodicity).
+        # Silent frames get 0 rather than the meaningless ratio of noise.
+        #
+        # NB the fitted sign is the opposite of the creak/devoicing hypothesis
+        # this was added on: `vstr_slope` enters at +0.133, so periodicity
+        # RISES into a turn-final pause. Best reading is that it is picking up
+        # final lengthening -- a turn ends on a sustained, cleanly voiced
+        # vowel, whereas a mid-turn hesitation tends to be cut off on a
+        # consonant or trail into breath. Recorded as measured; the creak
+        # story is not what the data shows.
+        vstr = np.clip(np.nan_to_num(np.where(loud, norm, 0.0)),
+                       0.0, 1.0).astype(np.float32)
 
     # --- spectral tilt: 80-1000 Hz vs 1000-4000 Hz ---
     freqs = np.fft.rfftfreq(nfft, d=1.0 / sr)
@@ -148,7 +167,7 @@ def analyse_file(x: np.ndarray, sr: int) -> FrameData:
     e_hi = power[:, hi_band].sum(axis=1) + 1e-12
     tilt_db = (10 * np.log10(e_lo / e_hi)).astype(np.float32)
 
-    return FrameData(sr=sr, rms_db=rms_db, f0=f0, tilt_db=tilt_db)
+    return FrameData(sr=sr, rms_db=rms_db, f0=f0, tilt_db=tilt_db, vstr=vstr)
 
 
 # ---------------------------------------------------------------- helpers
@@ -214,6 +233,17 @@ FEATURE_NAMES = [
     "prior_sil_rate",     # prior within-turn silences per second
     "prior_sil_mean",     # their mean duration
     "prior_sil_max",      # their longest
+    # --- periodicity (continuous, from the autocorrelation peak the voicing
+    # gate throws away). Appended rather than filed under "voice quality"
+    # above on purpose: `extract` writes by position, so appending keeps every
+    # existing index stable and makes this a strictly additive change.
+    # Only the SLOPE survived. Level versions (mean periodicity in the last
+    # 200 ms, and that same mean minus the speaker's own speech median) were
+    # both implemented and measured: 0.449 / 0.454 AUC on the dangerous long
+    # holds, i.e. chance, and carrying them cost 30 ms of English OOF delay.
+    # The rate of change is the cue; the absolute level is dominated by voice
+    # and channel, and the speaker-median reference did not remove that.
+    "vstr_slope",         # periodicity slope into the pause (see sign note)
 ]
 N_FEATURES = len(FEATURE_NAMES)
 
@@ -236,6 +266,7 @@ def extract(fd: FrameData, pause_start: float, pause_index: int) -> np.ndarray:
     rms = fd.rms_db[:n].astype(np.float64)
     f0 = fd.f0[:n].astype(np.float64)
     tilt = fd.tilt_db[:n].astype(np.float64)
+    vstr = fd.vstr[:n].astype(np.float64)
 
     # speech/silence gate, adapted to this speaker+channel from the prefix only
     floor = np.percentile(rms, 10)
@@ -312,5 +343,10 @@ def extract(fd: FrameData, pause_start: float, pause_index: int) -> np.ndarray:
         f[17] = _safe(len(durs) / max(total_dur, 1e-6))
         f[18] = _safe(durs.mean())
         f[19] = _safe(durs.max())
+
+    # ---- periodicity into the pause ----
+    # A slope, not a level: it is already speaker-relative by construction,
+    # which the measured level variants were not (see FEATURE_NAMES).
+    f[20] = _safe(_slope(vstr[mid]))
 
     return f
