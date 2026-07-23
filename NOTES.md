@@ -32,7 +32,7 @@ complete.
 **One more day.** I would attack that ambiguity where the headroom actually is:
 a perfect ranker would score 100 ms against our 1228 ms, so nearly all the gap
 is model quality rather than task structure. Concretely — train a small
-1-D CNN or GRU directly on the causal log-mel prefix instead of 20 hand-designed
+1-D CNN or GRU directly on the causal log-mel prefix instead of 21 hand-designed
 summary statistics, which is feasible on CPU at this data size and would let
 the model learn turn-final contours I had to guess at; pool both languages with
 turn-level augmentation to fight the 200-turn ceiling; and replace the fixed
