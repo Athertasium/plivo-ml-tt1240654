@@ -1,6 +1,6 @@
 # NOTES
 
-**Signal.** The model reads 21 causal prosodic features from the audio strictly
+**Signal —** the model reads 21 causal prosodic features from the audio strictly
 before each pause: terminal F0 slope and final pitch as a z-score against the
 talker's own prefix distribution (statements fall to the bottom of a speaker's
 range, continuations stay level), energy decay into the pause, final-syllable
@@ -13,7 +13,7 @@ near-perfect predictors are deliberately refused as causality violations:
 pause duration (needs `pause_end`, which the agent cannot know when the pause
 begins) and total file length (every eot pause here ends within 0.9 ms of EOF).
 
-**Where it fails.** It is weakest exactly where it costs: AUC against holds
+**Where it fails —** it is weakest exactly where it costs: AUC against holds
 longer than 1.0 s was at chance (0.513) before I reweighted training toward
 them, and it is still the binding constraint. Hindi does not beat its 850 ms
 silence-timer baseline at all. Sweeping the scorer's whole grid rather than
@@ -29,7 +29,7 @@ final lengthening, which is genuinely ambiguous from prosody alone — a human
 listener resolves it lexically, from whether the clause is syntactically
 complete.
 
-**One more day.** I would attack that ambiguity where the headroom actually is:
+**One more day —** I would attack that ambiguity where the headroom actually is:
 a perfect ranker would score 100 ms against our 1228 ms, so nearly all the gap
 is model quality rather than task structure. Concretely — train a small
 1-D CNN or GRU directly on the causal log-mel prefix instead of 21 hand-designed

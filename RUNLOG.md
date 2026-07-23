@@ -231,3 +231,18 @@ Note the in-sample English number moved the *wrong* way (1152 → 1192 ms) while
 OOF improved 1290 → 1228 ms. That is the stronger regularisation (C 0.1 →
 0.03) buying generalisation at the cost of fit, and it is the direction you
 want when only one of those two numbers is honest.
+
+## Post-final — diagnostic tooling fix (no score change)
+
+Scores unchanged: this touches `analyze.py` only. The model, `model.npz` and
+both prediction files are untouched, so every number above stands.
+
+Its hand-rolled `auc()` ranked ties with `np.argsort`, which hands distinct
+ranks to equal scores — so the per-feature AUC of the *discrete* features
+(`n_prior_pauses`, `prior_sil_*`) was partly reading row order as signal.
+Replaced with average ranks (`scipy.stats.rankdata`), now exact against
+`sklearn.roc_auc_score`. `n_prior_pauses` on long holds moves 0.494 → 0.499
+and falls to last in the ranking; the continuous features move by ≤0.003, so
+the feature-selection calls in Run 6 still hold. Logged because a measurement
+bug in the tool I used to pick features is worth recording even when it moves
+no score.
