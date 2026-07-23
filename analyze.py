@@ -19,6 +19,7 @@ import csv
 import os
 
 import numpy as np
+from scipy.stats import rankdata
 from sklearn.model_selection import GroupKFold
 
 import dataset
@@ -30,9 +31,10 @@ def auc(y: np.ndarray, s: np.ndarray) -> float:
     y = np.asarray(y)
     if y.sum() == 0 or y.sum() == len(y):
         return float("nan")
-    order = np.argsort(s)
-    ranks = np.empty(len(s), dtype=float)
-    ranks[order] = np.arange(1, len(s) + 1)
+    # Average ranks for ties -- discrete features (n_prior_pauses,
+    # pause_index) have large tie blocks, and argsort would break them by
+    # array position, making their AUC depend on row order.
+    ranks = rankdata(s)
     n1, n0 = y.sum(), len(y) - y.sum()
     return float((ranks[y == 1].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
 
@@ -85,8 +87,8 @@ def main() -> None:
 
     # ---- the metric that actually matters ----
     print("\n=== AUC: EOT vs holds longer than D (only these can cost) ===")
-    print(f"{'lang':<9}{'D=0.0':>9}{'D=0.3':>9}{'D=0.5':>9}"
-          f"{'D=0.8':>9}{'D=1.0':>9}")
+    print(f"{'lang':<9}{'D=0.0':>11}{'D=0.3':>11}{'D=0.5':>11}"
+          f"{'D=0.8':>11}{'D=1.0':>11}")
     for name, pk in packs.items():
         p = p_oof[spans[name]]
         yy, dd = pk["y"], pk["dur"]
@@ -95,7 +97,7 @@ def main() -> None:
             keep = (yy == 1) | ((yy == 0) & (dd > D))
             n_neg = int(((yy == 0) & (dd > D)).sum())
             cells.append(f"{auc(yy[keep], p[keep]):.3f}({n_neg})")
-        print(f"  {name:<7}" + "".join(f"{c:>9}" for c in cells))
+        print(f"  {name:<7}" + "".join(f"{c:>11}" for c in cells))
 
     # ---- per-feature discriminative power on the dangerous subset ----
     print("\n=== per-feature AUC (pooled) ===")
