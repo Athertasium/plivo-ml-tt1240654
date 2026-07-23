@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>End-of-Turn Detection — Solution Summary</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a21; --line:#252b36; --ink:#e6e9ef;
+    --dim:#98a2b3; --accent:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 24px 80px}
+  h1{font-size:2.1rem;line-height:1.15;margin:0 0 8px;letter-spacing:-.02em}
+  h2{font-size:1.3rem;margin:48px 0 12px;padding-bottom:8px;
+     border-bottom:1px solid var(--line);letter-spacing:-.01em}
+  h3{font-size:1.02rem;margin:28px 0 8px;color:var(--accent)}
+  p,li{color:#d3d8e0}
+  .sub{color:var(--dim);font-size:1.05rem;margin:0 0 28px}
+  .panel{background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:18px 20px;margin:18px 0}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  code{background:#1d222b;padding:1px 5px;border-radius:4px;color:#cbd5e1}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.93rem}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:.82rem;
+     text-transform:uppercase;letter-spacing:.04em}
+  td.num{font-family:var(--mono);text-align:right}
+  .win{color:var(--accent);font-weight:600}
+  .flat{color:var(--warn)}
+  .neg{color:var(--bad)}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:22px 0}
+  .kpi div{flex:1;min-width:150px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi .v{font-size:1.7rem;font-family:var(--mono);letter-spacing:-.02em}
+  .kpi .k{color:var(--dim);font-size:.78rem;text-transform:uppercase;
+    letter-spacing:.05em;margin-top:2px}
+  .scroll{overflow-x:auto}
+  ul{padding-left:20px} li{margin:5px 0}
+  .tag{display:inline-block;font-size:.72rem;padding:2px 8px;border-radius:99px;
+    border:1px solid var(--line);color:var(--dim);margin-right:6px}
+  .who{border-left:3px solid var(--accent);padding-left:14px;margin:14px 0}
+  .who.h{border-color:var(--warn)}
+  svg{display:block;max-width:100%;height:auto}
+  .cap{color:var(--dim);font-size:.85rem;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>End-of-Turn Detection</h1>
+<p class="sub">Predicting whether a pause in a phone call is a turn boundary or
+just a breath — from raw audio, causally, with no pretrained models.</p>
+
+<div class="kpi">
+  <div><div class="v win">1290 ms</div><div class="k">English OOF &middot; from 1600</div></div>
+  <div><div class="v flat">850 ms</div><div class="k">Hindi OOF &middot; baseline held</div></div>
+  <div><div class="v">0.660</div><div class="k">English OOF AUC</div></div>
+  <div><div class="v">20</div><div class="k">causal features</div></div>
+</div>
+
+<h2>1. The result in one table</h2>
+<div class="scroll">
+<table>
+  <tr><th>System</th><th>English</th><th>Hindi</th><th>Evaluation</th></tr>
+  <tr><td>Silence-only baseline</td><td class="num">1600 ms</td>
+      <td class="num">850 ms</td><td>given</td></tr>
+  <tr><td><strong>This model</strong></td><td class="num win">1290 ms</td>
+      <td class="num flat">850 ms</td><td>out-of-fold, grouped by turn</td></tr>
+  <tr><td>This model</td><td class="num">1152 ms</td>
+      <td class="num">850 ms</td><td>in-sample (shipped CSVs)</td></tr>
+  <tr><td>Perfect ranker (oracle)</td><td class="num">100 ms</td>
+      <td class="num">100 ms</td><td>upper bound on the metric</td></tr>
+</table>
+</div>
+<p><strong>English response delay drops 19%</strong>, 1600&nbsp;&rarr;&nbsp;1290&nbsp;ms
+out-of-fold. Hindi holds at its baseline — an honest null result, explained in
+&sect;6. The oracle row matters: a perfect ranker would score 100&nbsp;ms, so
+essentially <em>all</em> the remaining gap is model quality, not task structure.</p>
+
+<div class="panel">
+<strong>Every headline number is out-of-fold.</strong> Folds are
+<code>GroupKFold</code> over <code>turn_id</code>, so no turn is ever split
+across train and test. The starter's <code>train.py</code> refits on all rows
+and predicts on those same rows; with 100 turns per language and a 5% budget
+that is <em>five turns</em>, that number is meaningless and I never tuned
+against it.
+</div>
+
+<h2>2. Two leaks I refused to use</h2>
+<p>Both would have scored spectacularly on this data. Both are causality
+violations, and both are worthless in a live agent.</p>
+
+<div class="scroll">
+<table>
+  <tr><th>Leak</th><th>Strength on this data</th><th>Why it is invalid</th></tr>
+  <tr><td>Pause duration<br><span class="mono">pause_end − pause_start</span></td>
+      <td>hold 0.62 s vs eot 1.34 s (English)</td>
+      <td>At the instant a pause starts, how long it will last is the future.</td></tr>
+  <tr><td>Total file length</td>
+      <td><strong>100% accurate</strong> — every eot pause ends within 0.9 ms of EOF</td>
+      <td>"Is there audio after this pause" is precisely what we are asked to predict.</td></tr>
+</table>
+</div>
+
+<p>Rather than just avoiding them, I made compliance <em>auditable</em>. Two
+independent guards:</p>
+<ul>
+  <li><strong>Column level.</strong> <code>dataset.read_pause_rows</code>
+      whitelists <code>turn_id, audio_file, pause_index, pause_start</code>.
+      <code>predict.py</code> cannot see <code>pause_end</code> or
+      <code>label</code> at all, and asserts as much on startup.</li>
+  <li><strong>Sample level.</strong> <code>n_causal_frames</code> keeps only
+      frames lying <em>entirely</em> before <code>pause_start</code>, and every
+      normalisation statistic — noise floor, pitch median, mean pause length —
+      is computed inside that prefix. Whole-file statistics would smuggle the
+      future in through the normaliser.</li>
+</ul>
+<p>This also drove a design choice: the "how long has this speaker been talking
+since their last pause" feature is recovered from the energy gate rather than
+from the previous row's <code>pause_end</code>, so the model needs no
+annotation at inference time and the whitelist stays narrow.</p>
+
+<h2>3. The insight that reframed the problem</h2>
+<p>Reading <code>score.py</code> closely: a false cutoff is charged only when</p>
+<div class="panel mono">p &ge; threshold &nbsp;<strong>AND</strong>&nbsp; delay &lt; pause_duration</div>
+<p>So <strong>a hold shorter than the action delay is free</strong>, however
+badly it is ranked. Overall AUC is therefore the wrong health metric. Measuring
+AUC of EOT against <em>only holds longer than D</em> exposed the real failure:</p>
+
+<svg viewBox="0 0 620 250" role="img" aria-label="AUC against holds longer than D">
+  <line x1="60" y1="200" x2="590" y2="200" stroke="#252b36"/>
+  <line x1="60" y1="30" x2="60" y2="200" stroke="#252b36"/>
+  <line x1="60" y1="188" x2="590" y2="188" stroke="#f87171" stroke-dasharray="4 4" opacity=".6"/>
+  <text x="66" y="182" fill="#f87171" font-size="11">chance (0.50)</text>
+  <text x="20" y="40" fill="#98a2b3" font-size="11">0.70</text>
+  <text x="20" y="192" fill="#98a2b3" font-size="11">0.50</text>
+  <polyline points="110,78 230,96 350,113 470,105 590,187"
+    fill="none" stroke="#4ade80" stroke-width="2.5"/>
+  <circle cx="110" cy="78" r="4" fill="#4ade80"/>
+  <circle cx="230" cy="96" r="4" fill="#4ade80"/>
+  <circle cx="350" cy="113" r="4" fill="#4ade80"/>
+  <circle cx="470" cy="105" r="4" fill="#4ade80"/>
+  <circle cx="590" cy="187" r="5" fill="#f87171"/>
+  <text x="96" y="66" fill="#e6e9ef" font-size="11">.644</text>
+  <text x="216" y="84" fill="#e6e9ef" font-size="11">.626</text>
+  <text x="336" y="101" fill="#e6e9ef" font-size="11">.609</text>
+  <text x="456" y="93" fill="#e6e9ef" font-size="11">.617</text>
+  <text x="558" y="175" fill="#f87171" font-size="11">.513</text>
+  <text x="98" y="218" fill="#98a2b3" font-size="11">all</text>
+  <text x="212" y="218" fill="#98a2b3" font-size="11">&gt;0.3s</text>
+  <text x="332" y="218" fill="#98a2b3" font-size="11">&gt;0.5s</text>
+  <text x="452" y="218" fill="#98a2b3" font-size="11">&gt;0.8s</text>
+  <text x="566" y="218" fill="#98a2b3" font-size="11">&gt;1.0s</text>
+  <text x="250" y="240" fill="#98a2b3" font-size="11">hold pauses longer than D (English)</text>
+</svg>
+<p class="cap">Respectable overall (0.644), <strong>at chance on the long holds
+that actually decide the score</strong> (0.513). The model was separating the
+free ones.</p>
+
+<p>Two changes followed directly from this, and both are the parts of the
+solution I would defend hardest:</p>
+<h3>Scorer-matched training costs</h3>
+<p>Each hold is weighted by the fraction of the scorer's own delay grid at which
+it would actually be dangerous, so training stops spending capacity on the free
+short holds. EOT rows keep weight 1. This is a training-time <em>cost</em>, not
+a feature — pause duration never reaches <code>predict.py</code>.</p>
+
+<h3>Spreading scores across the threshold grid</h3>
+<p>Hindi kept selecting <code>threshold=0.05</code>, the lowest grid value —
+i.e. "fire on everything", the baseline. That is a calibration symptom, not a
+ranking one: <code>score.py</code> sweeps a <em>fixed</em> grid and only cares
+which side of a line a score falls on, so scores bunched into a narrow band
+leave the sweep no usable operating points. A monotone map through the
+training-score CDF onto [0.06, 0.97] fixes it. Being monotone it cannot change
+AUC; it exists purely to give the sweep resolution. The lower bound sits just
+above the lowest threshold, which <strong>guarantees the model can never score
+worse than the silence-timer baseline</strong>.</p>
+
+<h2>4. How the score moved</h2>
+<svg viewBox="0 0 620 220" role="img" aria-label="English OOF delay by run">
+  <g font-size="11" fill="#98a2b3">
+    <text x="0" y="26">baseline</text><text x="0" y="62">run 1</text>
+    <text x="0" y="98">run 3</text><text x="0" y="134">run 4</text>
+    <text x="0" y="170">final</text>
+  </g>
+  <rect x="70" y="14" width="525" height="18" rx="3" fill="#f87171" opacity=".85"/>
+  <rect x="70" y="50" width="435" height="18" rx="3" fill="#fbbf24" opacity=".85"/>
+  <rect x="70" y="86" width="461" height="18" rx="3" fill="#f87171" opacity=".6"/>
+  <rect x="70" y="122" width="428" height="18" rx="3" fill="#4ade80" opacity=".7"/>
+  <rect x="70" y="158" width="423" height="18" rx="3" fill="#4ade80"/>
+  <g font-size="11" fill="#0f1115" font-weight="700">
+    <text x="540" y="27">1600</text><text x="450" y="63">1325</text>
+    <text x="476" y="99">1405</text><text x="443" y="135">1305</text>
+    <text x="438" y="171">1290</text>
+  </g>
+  <text x="70" y="200" fill="#98a2b3" font-size="11">
+    English mean response delay, ms (out-of-fold) — lower is better</text>
+</svg>
+<p class="cap">Run 3 <span class="neg">regressed</span>: I changed the pitch
+tracker and added features in the same run, learned nothing from it, and had to
+unpick them separately. Kept in the log because it is the honest history.</p>
+
+<h3>The counter-intuitive one</h3>
+<p>The starter's autocorrelation pitch tracker is the <em>biased</em> estimator —
+it tapers with lag and leans toward high F0. Correcting it to unbiased made the
+pitch histogram look far more physical (English p10 152&nbsp;&rarr;&nbsp;103 Hz)
+and made the features <strong>worse</strong>. Adding proper octave resolution
+did not recover it either:</p>
+<div class="scroll">
+<table>
+  <tr><th>F0 estimator</th><th>|AUC − 0.5| of <span class="mono">f0_last_z</span></th><th>Verdict</th></tr>
+  <tr><td>Biased (original)</td><td class="num win">0.109</td><td>kept, on evidence</td></tr>
+  <tr><td>Unbiased</td><td class="num">0.079</td><td>reverted</td></tr>
+  <tr><td>Octave-resolved</td><td class="num">0.089</td><td>reverted</td></tr>
+</table>
+</div>
+<p>Best explanation: the taper suppresses spurious long-lag peaks in exactly the
+low-energy frames before a pause where these features are read — and since every
+pitch feature is speaker-relative (slope, z-score against the talker's own
+median), a consistent bias cancels out. <strong>A more "correct" signal
+processing choice was the wrong engineering choice, and only measurement caught
+it.</strong></p>
+
+<h2>5. What the model learned</h2>
+<svg viewBox="0 0 620 300" role="img" aria-label="standardised coefficients">
+  <line x1="310" y1="10" x2="310" y2="270" stroke="#252b36"/>
+  <g font-size="10.5" fill="#d3d8e0">
+    <text x="318" y="24">n_prior_pauses</text>
+    <text x="196" y="46" text-anchor="end">en_last_rel</text>
+    <text x="200" y="68" text-anchor="end">voiced_frac_end</text>
+    <text x="205" y="90" text-anchor="end">f0_last_z</text>
+    <text x="207" y="112" text-anchor="end">prior_sil_max</text>
+    <text x="318" y="134">en_slope_end</text>
+    <text x="222" y="156" text-anchor="end">log_pause_start</text>
+    <text x="318" y="178">tilt_end_rel</text>
+    <text x="225" y="200" text-anchor="end">final_run_rel</text>
+    <text x="318" y="222">final_run_dur</text>
+    <text x="228" y="244" text-anchor="end">f0_slope_end</text>
+    <text x="318" y="266">tilt_end</text>
+  </g>
+  <g opacity=".9">
+    <rect x="310" y="14" width="164" height="13" fill="#4ade80"/>
+    <rect x="217" y="36" width="93"  height="13" fill="#f87171"/>
+    <rect x="218" y="58" width="92"  height="13" fill="#f87171"/>
+    <rect x="228" y="80" width="82"  height="13" fill="#f87171"/>
+    <rect x="231" y="102" width="79" height="13" fill="#f87171"/>
+    <rect x="310" y="124" width="69" height="13" fill="#4ade80"/>
+    <rect x="251" y="146" width="59" height="13" fill="#f87171"/>
+    <rect x="310" y="168" width="58" height="13" fill="#4ade80"/>
+    <rect x="253" y="190" width="57" height="13" fill="#f87171"/>
+    <rect x="310" y="212" width="55" height="13" fill="#4ade80"/>
+    <rect x="261" y="234" width="49" height="13" fill="#f87171"/>
+    <rect x="310" y="256" width="47" height="13" fill="#4ade80"/>
+  </g>
+  <text x="330" y="290" fill="#4ade80" font-size="11">&rarr; predicts END OF TURN</text>
+  <text x="290" y="290" fill="#f87171" font-size="11" text-anchor="end">predicts HOLD &larr;</text>
+</svg>
+<p>The signs are linguistically sensible, which is a useful sanity check:
+pitch dropping toward the bottom of the speaker's own range
+(<span class="mono">f0_last_z</span> negative), energy trailing off
+(<span class="mono">en_last_rel</span> negative), and less voicing at the tail
+all push toward end-of-turn. <span class="mono">prior_sil_max</span> is the
+feature that came out of error analysis: a talker who has <em>already</em>
+produced long mid-turn silences makes any given silence weaker evidence that
+they are finished.</p>
+<p>An ablation removing all context features (keeping acoustics only) is worse
+across the board — 1350 ms vs 1305 ms English OOF — so the context features are
+earning their place rather than memorising "turns are about 11 seconds".</p>
+
+<h2>6. Where it still fails — the honest part</h2>
+<p><strong>Hindi never beats its 850 ms baseline.</strong> The arithmetic
+explains why. To win at an 800 ms delay the model would need
+<strong>&ge;94 of 100</strong> turn-ends to fire (otherwise the 1.6 s timeouts
+on missed ends swamp the gain) <em>while</em> keeping every firing long hold
+inside a 5-turn budget. A threshold low enough for 94% recall on turn-ends is
+far too low to suppress the long holds. An AUC near 0.65 cannot buy both.</p>
+<p>Hindi is also intrinsically a harder target than the brief suggests: no Hindi
+hold pause exceeds 1.5 s, so a plain 850 ms timer already sits inside the
+budget. Since the hidden test is <em>mostly Hindi</em>, 850 ms — not 1600 ms —
+is the real bar, and the calibration floor at least guarantees no regression
+below it.</p>
+<p>The residual errors are concentrated in hesitant speakers who pause mid-phrase
+with level pitch and no final lengthening. That is genuinely ambiguous from
+prosody alone — a human listener resolves it <em>lexically</em>, from whether
+the clause is syntactically complete. No amount of pitch and energy engineering
+recovers that.</p>
+
+<h2>7. Why this beats the status quo</h2>
+<ul>
+  <li><strong>Against a silence timer</strong> (what naive VAD endpointing
+      does): 19% lower response delay on English at the same 5% interruption
+      rate, and never worse on Hindi by construction.</li>
+  <li><strong>Against a leak-fitted model:</strong> a model using pause duration
+      or file length would post a near-perfect score here and fail completely in
+      production. Refusing those is the difference between a number and a
+      system.</li>
+  <li><strong>Against in-sample reporting:</strong> the honest OOF gap (1290 vs
+      1152 ms in-sample) is roughly 140 ms — anyone tuning on in-sample numbers
+      is optimising noise on a 5-turn budget.</li>
+  <li><strong>Deployment shape:</strong> ships as four arrays in an
+      <code>.npz</code>; inference is a standardise-then-dot-product with no
+      pickle to break across scikit-learn versions. Gradient boosting won three
+      of four ablation columns and was still rejected for this reason, since its
+      edge on the actual metric was nil where it counted.</li>
+</ul>
+
+<h2>8. Human vs coding agent</h2>
+<div class="who h">
+<span class="tag">HUMAN</span><strong>Direction and judgement calls.</strong>
+Chose the track; approved the plan and the phase ordering; set the constraint
+that causality compliance had to be <em>auditable</em> rather than merely
+correct, which drove the whitelist design; made the call to ship robust
+logistic regression over the better-scoring gradient booster.
+</div>
+<div class="who">
+<span class="tag">AGENT</span><strong>Implementation and measurement.</strong>
+Data inspection that surfaced both leaks; the vectorised FFT pitch/spectral
+front end replacing the starter's O(n²) per-frame loop; the 20 causal features;
+the grouped-CV and cross-lingual evaluation harness; the dangerous-hold
+diagnostic; the scorer-matched cost weights and threshold-grid calibration; the
+ablation table; and these documents.
+</div>
+<p class="cap">The agent's leverage was in mechanical throughput — writing the
+harness, running ablations, and catching the F0 regression by measurement
+rather than intuition. The judgement that shaped the outcome was in reading the
+scorer carefully enough to realise short holds are free, and in refusing two
+leaks that would have produced a much better number and a much worse system.</p>
+
+<h2>9. Reproducing</h2>
+<div class="panel mono" style="font-size:.85rem;line-height:1.9">
+python train_model.py --data_dirs eot_data/english eot_data/hindi<br>
+python predict.py --data_dir eot_data/hindi --out predictions.csv<br>
+python score.py&nbsp;&nbsp;&nbsp;--data_dir eot_data/hindi --pred predictions.csv<br>
+python analyze.py&nbsp;&nbsp;--data_dirs eot_data/english eot_data/hindi&nbsp;&nbsp;<span style="color:#98a2b3"># diagnostics</span><br>
+python experiments.py --data_dirs eot_data/english eot_data/hindi&nbsp;&nbsp;<span style="color:#98a2b3"># ablations</span>
+</div>
+<p class="cap"><code>score.py</code> is the organisers' file, unmodified — all
+reported numbers come from it, never from a reimplementation.</p>
+
+</div>
+</body>
+</html>

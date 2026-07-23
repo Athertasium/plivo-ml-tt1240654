@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+base_en.csv
+base_hi.csv
+eot_data/
+*.wav
